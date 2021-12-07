@@ -1,0 +1,234 @@
+---
+title: "Week 13 - Annimated and interactive plots"
+author: "Jose Luis Rodriguez Gil"
+date: "07/12/2021"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    theme: cosmo
+    highlight: tango
+    number_sections: true
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading the packages and formating
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(janitor)
+library(here)
+library(lubridate) 
+
+library(gganimate) #annimated (e.g. gif) plots
+library(plotly)
+
+
+```
+
+Note that you might get the following warnings:
+
+"No renderer backend detected. gganimate will default to writing frames to separate files
+Consider installing:
+- the `gifski` package for gif output
+- the `av` package for video output
+and restarting the R session"
+
+gganimate uses other packages to do the bulk of the work (wether it is creating a .gif or a video), depending on what you are aiming to do, you might need to install one of those packages. Today we are going to be making gifs, so we will need `gifski`. You just have to install it, you dont need to load it yourself, as `gganimate will do that in the background, it just needs it to be installed`
+
+
+```{r load_my_theme, include=FALSE}
+
+source(here("functions", "theme_pepe_full.R"))
+
+theme_set(theme_pepe_full())  #Sets the theme for all ggplot plots in this .Rmd file (no need to call it in the plot itself)
+
+```
+
+# Loading the data
+
+Today we are going to work with the mock-up data of a time series that we have used already in previous classses.
+
+```{r load_the_data, echo=FALSE}
+
+ts_data <- read_csv(here("data", "time_series.csv"))
+
+ts_data <- ts_data %>% 
+  mutate(treatment = factor(treatment, levels = c("Low", "Medium", "High")))
+
+ts_data
+
+```
+
+
+# Animated figures
+
+WE will be using the package `{gganimate}` for this. You can find all the info you need [here](https://www.gganimate.com/reference/index.html)
+
+## Adding point by point along axis
+
+This one is easiest. We can use `transition_time()` as this one intended for data where the states are representing specific point in time. 
+
+```{r figure_1}
+
+figure_1 <- ts_data %>% 
+  filter( compound == "compound_1") %>% 
+  ggplot() +
+  geom_point(aes(x = samp_date_time, y = concentration, colour = treatment)) +
+
+  # ggannimate sections
+  
+  labs(x = NULL,
+       y = "Concentration",
+       title = 'date: {frame_time}') +
+  transition_time(samp_date_time) +
+  shadow_mark()
+
+figure_1 <- animate(figure_1, duration = 10, width = 500, height = 500,  renderer = gifski_renderer(loop = TRUE))
+
+figure_1  # NOTE: print(figure_1) works to show it in the viewer, but it wont knit the gif
+
+```
+
+
+NOTE: You might get this error: "Error in transform_path(all_frames, states[[i]], ease, nframes[i], !!id, : transformr is required to tween paths and lines"
+
+
+```{r save_figure_1}
+
+anim_save(here("figures", "figure_1.gif"), figure_1)
+
+```
+
+
+## Revealing along axis
+
+It is easy to add ponts to a plot, but when we have an object that "exists" along the whole plot (e.g. a line) things get more complicated, as the program needs to figure out how to display the non-existing data (e.g. the interpolation line betwene two points). For this it is just easier to use `transition_reveal()` which basically renders the whole plot in advance and the it just reveals parts of it as we go.
+
+```{r figure_2}
+
+figure_2 <- ts_data %>% 
+  filter( compound == "compound_1") %>% 
+  group_by(treatment, year, month) %>% 
+  summarise(mean_concentration = mean(concentration, na.rm = TRUE)) %>% 
+  ggplot() +
+  geom_line(aes(x = month, y = mean_concentration, colour = treatment)) +
+  scale_x_continuous(breaks = seq(1,12, by = 1)) +
+  theme(legend.position = "bottom") +
+  labs(x = "Month",
+       y = "Concentration") +
+
+  # ggannimate sections
+  transition_reveal(along = month)
+
+
+figure_2 <- animate(figure_2, duration = 10, width = 500, height = 500,  renderer = gifski_renderer(loop = TRUE))
+
+figure_2
+
+```
+
+```{r save_figure_2}
+
+anim_save(here("figures", "figure_2.gif"), figure_2)
+
+```
+
+
+## shape-shifting plots
+
+What is we want to transition between "completely different plots", for example, different box plots each showing different monthly data? 
+
+Lets look into what it is we want to do. Basically we want to take the facetted boxplot below and animate it so it can transition from one panel to the next
+
+```{r preview_of_figure_3}
+
+ts_data %>% 
+  filter( compound == "compound_1") %>% 
+  ggplot() +
+  facet_wrap(~month) +
+  geom_boxplot(aes(x = treatment, y = concentration))
+ 
+```
+Here we need to use `transition_states()` to define what our *states* are going to be (i.e. each monthly box plot), and how to transition from one to the other. This is caled **Tweening** and allows control over how graphical elements change into, between, and out of states.in these case we are using `enter_fade()` to tell that the entering plot should fade-in and `exit_shrink()` that the leaving plot should shrink out.
+
+```{r figure_3}
+
+figure_3 <- ts_data %>% 
+  filter( compound == "compound_1") %>% 
+  ggplot() +
+  geom_boxplot(aes(x = treatment, y = concentration, colour = treatment)) +
+  geom_jitter(aes(x = treatment, y = concentration, colour = treatment), alpha = 0.4) +
+  scale_colour_brewer(palette = "Set1") +
+ 
+   # ggannimate sections
+   transition_states(
+    month,
+    state_length = 1,
+    transition_length = 2
+  ) +
+  labs(x = "Treatment",
+       y = "Concentration",
+       title = "Month: {closest_state}") +
+  enter_fade() +
+  exit_shrink() +
+  ease_aes('sine-in-out')
+
+figure_3 <- animate(figure_3, duration = 10, width = 500, height = 500,  renderer = gifski_renderer(loop = TRUE))
+
+
+figure_3  # NOTE: print(figure_3) works to show it in the viewer, but it wont knit the gif
+
+```
+
+
+
+```{r save_figure_3}
+
+anim_save(here("figures", "figure_3.gif"), figure_3)
+
+```
+
+
+# Interactive plots with `plotly`
+
+Interactive plots allow us to explore the data (e.g. zoom in and out) and can be very helpful in exploratory stages when you are making sure all your data lok alright and are trying to determine if there are any outliers
+
+For this we can use the `{ggplotly}` package, wich serves as a translation layer between R and **plotly**, a visualization engine based on *javascript*
+
+Using it is fairly easy, you just make a ggplot and then apply `ggplotly()` to it.
+
+```{r figure_4_static}
+
+figure_4 <- ts_data %>% 
+  filter( compound == "compound_1") %>% 
+  ggplot() +
+  geom_point(aes(x = samp_date_time, y = concentration, colour = treatment)) 
+
+figure_4
+
+```
+
+
+Unfortunately, as mentioned `ggplotly` is mainly a translator and sometimes there are things from one language that dont have a direct translation in another one. Same here, many conponents of ggplot will not translate in the ggplotly version, so plots are usually simplified. Either way it is quite useful for exploratory work.
+
+```{r figure_4_interactive}
+
+ggplotly(figure_4)
+
+```
+
+
+
+
+
+
+
+

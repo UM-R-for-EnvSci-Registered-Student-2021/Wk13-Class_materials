@@ -1,0 +1,191 @@
+---
+title: "Week 13 - Review of `pmap()`"
+author: "Jose Luis Rodriguez Gil"
+date: "07/12/2021"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    theme: cosmo
+    highlight: tango
+    number_sections: true
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=FALSE}
+
+library(tidyverse)
+library(janitor)
+library(here)
+library(lubridate) 
+
+```
+
+```{r load_my_theme, include=FALSE}
+
+source(here("functions", "theme_pepe_full.R"))
+
+theme_set(theme_pepe_full())  #Sets the theme for all ggplot plots in this .Rmd file (no need to call it in the plot itself)
+
+```
+
+# Loading data
+
+We are going to work again with the **ditch** dataset from the [Zur et al 2007](https://www.highstat.com/index.php/analysing-ecological-data) book.
+
+```{r, message=FALSE}
+
+ditch_data_original <- read_csv(here("data", "ditch.csv"))
+
+ditch_data_original
+
+```
+
+# Data preparation
+
+```{r}
+
+ditch_data <- ditch_data_original %>% 
+  clean_names() %>% 
+  pivot_longer(cols = -c(site, year, month, depth),
+               names_to = "parameter",
+               values_to = "value")
+
+ditch_data
+
+```
+
+# Preliminary look at the data
+
+```{r}
+
+ditch_data %>% 
+  filter(parameter == "total_phosphate") %>% 
+  ggplot() +
+  facet_wrap(~ site) +
+  geom_point(aes(x = month, y = value, colour = as.factor(year))) + 
+  scale_color_brewer(palette = "Set2") +
+  theme(legend.position = "bottom") +
+  labs(x = "Month",
+       y = "Total phosphate")
+
+```
+
+#  Let's use `pmap()`
+
+The plot above is great, but what if we needed those pannels saved as individual plots? We could obviously make them individually by copy-pasting the code above and adding a `filter(site == XXXX)` step for each of the 5 sites... but what if instead of 5 sites i had 100? would you still want to do it that way?
+
+Probably not, so we need a tool which will allow us to **automate** this process. Something that can perform a **task** (in this case creating the plot) in an iterative manner over a number of subsets of the data
+
+## Create a nested tibble with the data subsets
+
+To accomplish our task, the first thing we need is to prepare our data. What we want to do is to create **one plot for each site**. In the "hand made" option i provided above you would have needed to filter the data for each site and then make the plot. Same here, we need to create **subsets** of the data for each site.
+
+Instead of doing it one by one by filtering, we are going to use `group_by()` and `nest()` to create a **nested tibble** containing those subsets:
+
+```{r}
+
+nested_data <- ditch_data %>% 
+  filter(parameter == "total_phosphate") %>% 
+  group_by(site) %>% 
+  nest()
+
+nested_data
+
+```
+
+## Apply the plot code to each subset
+
+Now that we have our data subsets for each site, what we need is a tool which will allow us to apply the code that makes the plot to each subset. That tool is `pmap()`.
+
+The idea will be to use `mutate()` to create a new column in the nested tibble wich will contain the plot.
+
+```{r}
+
+nested_data_and_plots <- nested_data %>% 
+  mutate(plot = pmap(list(data, site),
+                     ~ ggplot() +
+                       geom_point(data = ..1, aes(x = month, y = value, colour = as.factor(year))) + 
+                       scale_color_brewer(palette = "Set2") +
+                       theme(legend.position = "bottom") +
+                       labs(x = "Month",
+                            y = "Total phosphate",
+                            title = ..2)
+  ))
+
+nested_data_and_plots
+
+```
+
+
+The coloum `plot` contains the plots generated for each site. WE can *dig* through it to se one of them
+
+```{r}
+
+nested_data_and_plots$plot[[1]]
+
+```
+
+## Prepping the plots to be saved individually
+
+Now we have a bunch of plots contained in the nested tibble. To save them all individually we need to prepe the data a bit. 
+
+First we need to create the names we want to give these files.
+
+
+```{r}
+
+data_for_plots <- nested_data_and_plots %>% 
+  mutate(filename = str_c(site, "plot.pdf", sep = "_"))
+
+data_for_plots
+
+```
+
+Now we need to keep only what we need, i.e. the plots and their file names:
+
+```{r}
+
+data_for_plots %>% 
+  select(plot, filename)
+
+```
+
+oh, no! it doenst work. Site is a **grouping variable** in the dataset (from when we used `group_by()`). R is not gonna et you get rid of it without a fight!
+
+We need to `ungroup()` first now that we dont need that column to be that important.
+
+
+```{r}
+
+data_for_plots_clean <- data_for_plots %>% 
+  ungroup() %>% 
+  select(plot, filename)
+
+data_for_plots_clean
+
+```
+
+
+## Save the plots
+
+now that we have just the plot and its filename, we can apply `pwalk()`
+
+NOTE: For this step to work, the `plot` and `filename` variable need to be called **exactly** that.
+
+```{r}
+
+pwalk(data_for_plots_clean,           # what we want to walk through
+      ggsave,                    # what we want to do as we walk through the object   
+      path =  here("figures"),   # where we want to save it
+      width = 120, height = 120, units = "mm") # other things you need for ggsave
+
+```
+
